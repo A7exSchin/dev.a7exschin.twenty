@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 use notify_rust::Notification;
 use std::time::Duration;
 use std::thread;
@@ -5,6 +6,7 @@ use std::sync::mpsc::{self, TryRecvError};
 use std::sync::{Arc, Mutex};
 use image::ImageReader;
 use iced::window::icon;
+use std::io::Cursor;
 
 use iced::widget::{
     self, button, column, container, row, slider, text, Text
@@ -12,8 +14,10 @@ use iced::widget::{
 use iced::{Element, Center, Fill, Task, Bottom, window};
 
 fn main() -> iced::Result {
-    let img = ImageReader::open("assets/icon.png")
-        .unwrap()
+    let image_bytes = include_bytes!("../assets/icon_transparent_bg.png");
+    let img = ImageReader::new(Cursor::new(image_bytes))
+        .with_guessed_format()
+        .expect("Failed to guess image format")
         .decode()
         .unwrap()
         .into_rgba8();
@@ -165,19 +169,29 @@ fn spawn_timer_thread(timeout_arg: u8, timer_arg: u8, channel: Arc<Mutex<(mpsc::
 
     let channel = Arc::clone(&channel);
     thread::spawn(move || {
-        loop {
+        let mut running = true;
+        while running {
             let notif_msg = format!("Take a break! Look away from the screen for {} seconds.", timeout.as_secs());
-            thread::sleep(timer);
-            match channel.lock().unwrap().1.try_recv() {
-                Ok(a_) => {
-                    println!("Received stop message... {:?}", a_);
-                    break;
+            let mut sleeping: bool = true;
+            let start_time = std::time::Instant::now();
+            while sleeping {
+                match channel.lock().unwrap().1.try_recv() {
+                    Ok(a_) => {
+                        println!("Received stop message... {:?}", a_);
+                        sleeping = false;
+                        running = false;
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        println!("Channel disconnected, stopping timer...");
+                        return;
+                    }
+                    Err(TryRecvError::Empty) => {}
                 }
-                Err(TryRecvError::Disconnected) => {
-                    println!("Channel disconnected, stopping timer...");
-                    break;
+                thread::sleep(Duration::from_millis(300));
+                if start_time.elapsed() >= timer {
+                    sleeping = false;
                 }
-                Err(TryRecvError::Empty) => {}
+
             }
             println!("Time to take a break! Look away from the screen.");
             Notification::new()
@@ -186,7 +200,27 @@ fn spawn_timer_thread(timeout_arg: u8, timer_arg: u8, channel: Arc<Mutex<(mpsc::
                 .timeout(timeout.as_secs() as i32)
                 .show()
                 .unwrap();
-            thread::sleep(timeout);
+
+            let mut timeouted = true;
+            let start_time = std::time::Instant::now();
+            while timeouted {
+                match channel.lock().unwrap().1.try_recv() {
+                    Ok(a_) => {
+                        println!("Received stop message... {:?}", a_);
+                        timeouted = false;
+                        running = false;
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        println!("Channel disconnected, stopping timer...");
+                        return;
+                    }
+                    Err(TryRecvError::Empty) => {}
+                }
+                thread::sleep(Duration::from_millis(300));
+                if start_time.elapsed() >= timeout {
+                    timeouted = false;
+                }
+            }
         }
     });
 }
